@@ -55,54 +55,36 @@ void main() {
         return;
     }
  
-    // 1. Grain + flicker (always increasing)
-    float grain = rand(uv * (300.0 + progress * 1200.0) + t * 10.0);
-    float flicker = 1.0 + 0.3 * sin(t * (2.0 + progress * 8.0));
-    color *= flicker;
-    color += (grain - 0.5) * 0.2 * progress;
+    // 1. Horizontal Line Displacement (estilo datamosh)
+    float lineHeight = 2.0 + progress * 8.0;
+    float lineIndex = floor(uv.y * height / lineHeight);
+    float displaceAmount = (rand(vec2(lineIndex, floor(t * 2.0))) - 0.5) * 0.3 * pow(progress, 0.6);
+    float shouldDisplace = step(0.7, rand(vec2(lineIndex, floor(t * 3.0))));
+    vec2 displacedUV = vec2(uv.x + displaceAmount * shouldDisplace, uv.y);
+    color = texture(image, displacedUV).rgb;
 
-    // 2. Infection spread (expanding irregular mask)
-    float spread = pow(progress, 0.6);
-    float n = smoothNoise(uv * (6.0 + progress * 40.0) + t * 0.5);
-    float mask = smoothstep(spread - 0.1, spread + 0.1, 1.0 - min(min(uv.x, 1.0-uv.x), min(uv.y, 1.0-uv.y)) + (n-0.5)*0.5);
-    vec3 infection = mix(color, vec3(n), mask * 0.8 * progress);
-    color = mix(color, infection, progress);
+    // 2. Pixel Sorting / Stretching
+    float sortLine = floor(uv.y * (50.0 + progress * 200.0));
+    float sortTrigger = step(0.75, rand(vec2(sortLine, floor(t * 2.5))));
+    if (sortTrigger > 0.5) {
+        float stretchX = uv.x + (rand(vec2(sortLine, t)) - 0.5) * 0.1;
+        vec2 stretchUV = vec2(stretchX, uv.y);
+        vec3 stretchedColor = texture(image, stretchUV).rgb;
+        color = mix(color, stretchedColor, pow(progress, 0.7));
+    }
 
-    // 3. Chromatic aberration (amplitude grows)
-    float chroma = 0.02 * progress * (0.5 + 0.5 * sin(t * 0.7));
-    vec2 offset = vec2(chroma * (rand(vec2(t, uv.y)) - 0.5), 0.0);
-    float r = texture(image, uv + offset).r;
-    float g = texture(image, uv).g;
-    float b = texture(image, uv - offset).b;
-    vec3 abColor = vec3(r, g, b);
-    color = mix(color, abColor, progress * 1.2);
-
-    // 4. Melting distortion (waves + time)
-    float meltStrength = 0.005 + 0.02 * progress;
-    vec2 meltUV = uv + vec2(
-        sin(uv.y * (40.0 + 100.0 * progress) + t * (1.0 + progress * 5.0)) * meltStrength,
-        cos(uv.x * (30.0 + 80.0 * progress) + t * (0.5 + progress * 3.0)) * meltStrength
-    );
-    color = mix(color, texture(image, meltUV).rgb, progress * 0.8);
-
-    // 5. Glitch slicing (horizontal/vertical shifts)
-    float glitchFreq = 0.2 + progress * 5.0;
-    float glitchLine = step(0.9, rand(vec2(floor(uv.y * (10.0 + progress * 100.0)), t * glitchFreq)));
-    vec2 gShift = vec2(glitchLine * (0.05 + 0.15 * progress) * (rand(vec2(uv.y, t)) - 0.5), 0.0);
-    vec3 glitchColor = texture(image, uv + gShift).rgb;
-    color = mix(color, glitchColor, glitchLine * progress);
-
-    // 6. Dissolution into full noise
-    float dissolve = pow(progress, 2.0);
-    float fullNoise = rand(uv * (500.0 + progress * 5000.0) + t * 20.0);
-    vec3 dissolved = mix(color, vec3(fullNoise), dissolve);
-    color = mix(color, dissolved, dissolve);
+    // 3. RGB Channel Shift (separación extrema de canales)
+    float shiftAmount = 0.02 + 0.08 * pow(progress, 0.8);
+    float shiftPattern = floor(uv.y * (30.0 + progress * 100.0));
+    float shiftR = (rand(vec2(shiftPattern, floor(t * 2.0))) - 0.5) * shiftAmount;
+    float shiftG = (rand(vec2(shiftPattern + 1.0, floor(t * 2.0))) - 0.5) * shiftAmount;
+    float shiftB = (rand(vec2(shiftPattern + 2.0, floor(t * 2.0))) - 0.5) * shiftAmount;
     
-    // 7. Horizontal scan lines (efecto de líneas de escaneo)
-    float scanlineFreq = 300.0 + progress * 200.0;
-    float scanline = sin(uv.y * scanlineFreq + t * 2.0) * 0.5 + 0.5;
-    scanline = pow(scanline, 8.0) * 0.3 * progress;
-    color += vec3(scanline);
+    float r = texture(image, vec2(uv.x + shiftR, uv.y)).r;
+    float g = texture(image, vec2(uv.x + shiftG, uv.y)).g;
+    float b = texture(image, vec2(uv.x + shiftB, uv.y)).b;
+    
+    color = vec3(r, g, b);
 
     // Clamp + output
     color = clamp(color, 0.0, 1.0);
@@ -227,6 +209,7 @@ def main():
     texture = load_texture(ctx, "demo.jpg")
     texture.use(location=0)
     program['image'] = 0
+    program['height'] = float(height)
 
     start_time = time.time()
     paused_time = 0.0
