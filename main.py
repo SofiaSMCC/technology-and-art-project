@@ -23,7 +23,7 @@ out vec4 fragColor;
 uniform sampler2D image;
 uniform float progress;
 uniform float time;
-uniform float isPaused;
+uniform bool isPaused;
 
 // Random + noise functions
 float rand(vec2 co) {
@@ -48,13 +48,13 @@ void main() {
     // Base calm image
     vec3 base = texture(image, uv).rgb;
     vec3 color = base;
-    
+
     // Si está pausado, solo mostrar la imagen base
-    if (isPaused > 0.5) {
+    if (isPaused) {
         fragColor = vec4(color, 1.0);
         return;
     }
- 
+
     // 1. Grain + flicker (always increasing)
     float grain = rand(uv * (300.0 + progress * 1200.0) + t * 10.0);
     float flicker = 1.0 + 0.3 * sin(t * (2.0 + progress * 8.0));
@@ -128,7 +128,7 @@ out vec4 fragColor;
 uniform vec2 resolution;
 uniform vec2 buttonPos;
 uniform vec2 buttonSize;
-uniform float isPaused;
+uniform bool isPaused;
 
 float sdRoundBox(vec2 p, vec2 b, float r) {
     vec2 q = abs(p) - b + r;
@@ -157,7 +157,7 @@ void main() {
     vec3 symbolColor = vec3(0.95);
     float symbol = 0.0;
     
-    if (isPaused > 0.5) {
+    if (!isPaused) {
         // Triángulo de play (apuntando a la derecha)
         vec2 tp = p / buttonSize;
         // Crear un triángulo simple: punto en X>0, se estrecha en Y
@@ -200,11 +200,11 @@ def load_texture(ctx, path):
 
 def main():
     pygame.init()
-    width, height = 800, 600
+    width, height = 1200, 720
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
-    pygame.display.set_mode((width, height), DOUBLEBUF | OPENGL)
+    pygame.display.set_mode((width, height), DOUBLEBUF | OPENGL | RESIZABLE)
     pygame.display.set_caption("Internal Noise - Arte y Tecnología")
 
     ctx = moderngl.create_context()
@@ -224,17 +224,18 @@ def main():
     vao = ctx.simple_vertex_array(program, vbo, 'in_vert')
     ui_vao = ctx.simple_vertex_array(ui_program, vbo, 'in_vert')
 
-    texture = load_texture(ctx, "demo.jpg")
+    texture = load_texture(ctx, "placeholder.jpg")
     texture.use(location=0)
     program['image'] = 0
 
     start_time = time.time()
-    paused_time = 0.0
     duration = 60.0
+    isPaused = False
+    resetting = False
+    reset_duration = 3.0
+    reset_start = 0.0
+    reset_from = 0.0
     clock = pygame.time.Clock()
-    
-    is_paused = False
-    pause_start = 0.0
     
     button_pos = np.array([width - 80.0, height - 80.0], dtype='f4')
     button_size = np.array([60.0, 60.0], dtype='f4')
@@ -245,50 +246,47 @@ def main():
             if event.type == QUIT:
                 running = False
             elif event.type == KEYDOWN:
+                # Quit program
                 if event.key == K_ESCAPE:
                     running = False
+                # Reset time
                 elif event.key == K_r:
                     start_time = time.time()
-                    paused_time = 0.0
-                    is_paused = False
+                    resetting = False
+                # Pause / Unpause
                 elif event.key == K_SPACE:
-                    is_paused = not is_paused
-                    if is_paused:
-                        pause_start = time.time()
-                    else:
+                    if not resetting:
+                        resetting = True
+                        reset_start = time.time()
+                        reset_from = min(1.0, elapsed / duration)
+                    
+                    if isPaused:
+                        isPaused = False
                         start_time = time.time()
-                        paused_time = 0.0
-            elif event.type == MOUSEBUTTONDOWN:
-                if event.button == 1:  
-                    mx, my = event.pos
-                    my = height - my 
-                    if (button_pos[0] <= mx <= button_pos[0] + button_size[0] and
-                        button_pos[1] <= my <= button_pos[1] + button_size[1]):
-                        is_paused = not is_paused
-                        if is_paused:
-                            pause_start = time.time()
-                        else:
-                            start_time = time.time()
-                            paused_time = 0.0
+                        resetting = False
 
-        if is_paused:
-            elapsed = pause_start - start_time - paused_time
+        elapsed = time.time() - start_time    
+
+        if resetting:
+            t = (time.time() - reset_start) / reset_duration
+            if t >= 1.0:
+                isPaused = True
+            else:
+                progress = reset_from * (1.0 - t)
         else:
-            elapsed = time.time() - start_time - paused_time
-            
-        progress = min(1.0, elapsed / duration)
+            progress = min(1.0, elapsed / duration)
 
         ctx.clear(0.0, 0.0, 0.0)
         
         program['progress'].value = progress
         program['time'].value = elapsed
-        program['isPaused'].value = 1.0 if is_paused else 0.0
+        program['isPaused'].value = isPaused
         vao.render(moderngl.TRIANGLE_STRIP)
 
         ui_program['resolution'].value = (width, height)
         ui_program['buttonPos'].value = tuple(button_pos)
         ui_program['buttonSize'].value = tuple(button_size)
-        ui_program['isPaused'].value = 1.0 if is_paused else 0.0
+        ui_program['isPaused'].value = isPaused
         ui_vao.render(moderngl.TRIANGLE_STRIP)
 
         pygame.display.flip()
