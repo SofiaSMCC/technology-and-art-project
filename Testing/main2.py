@@ -4,6 +4,7 @@ import moderngl
 import numpy as np
 from PIL import Image
 import time
+import os
 
 VERT_SHADER = """
 #version 330
@@ -160,14 +161,10 @@ void main() {
     if (!isPaused) {
         // Triángulo de play (apuntando a la derecha)
         vec2 tp = p / buttonSize;
-        // Crear un triángulo simple: punto en X>0, se estrecha en Y
-        float slope = 0.12 / 0.12; // altura / base
-        float leftEdge = -0.06; // inicio del triángulo
-        float rightEdge = 0.06; // punta del triángulo
+        float slope = 0.12 / 0.12;
+        float leftEdge = -0.06;
+        float rightEdge = 0.06;
         
-        // Dentro del triángulo si:
-        // 1. X está entre leftEdge y rightEdge
-        // 2. Y está dentro de las líneas diagonales
         float inX = step(leftEdge, tp.x) * step(tp.x, rightEdge);
         float maxY = slope * (rightEdge - tp.x);
         float inY = step(-maxY, tp.y) * step(tp.y, maxY);
@@ -198,8 +195,61 @@ def load_texture(ctx, path):
     tex.filter = (moderngl.LINEAR, moderngl.LINEAR)
     return tex
 
+class AudioLayer:
+    """Gestiona una capa de audio que se activa en un momento específico"""
+    def __init__(self, path, activation_progress, volume=1.0):
+        self.path = path
+        self.activation_progress = activation_progress
+        self.volume = volume
+        self.sound = None
+        self.channel = None
+        self.is_active = False
+        self.was_paused = False
+        
+    def load(self):
+        """Carga el archivo de audio si existe"""
+        if os.path.exists(self.path):
+            try:
+                self.sound = pygame.mixer.Sound(self.path)
+                self.sound.set_volume(self.volume)
+                return True
+            except Exception as e:
+                print(f"❌ Error cargando {self.path}: {e}")
+                return False
+        return False
+            
+    def update(self, current_progress, is_paused):
+        """Actualiza el estado del audio según el progress y pausa"""
+        if not self.sound:
+            return
+            
+        # Activar el audio cuando se alcanza el punto de activación
+        if current_progress >= self.activation_progress and not self.is_active:
+            self.channel = self.sound.play(loops=-1)  # Loop infinito
+            self.is_active = True
+            print(f"🔊 Audio activado: {os.path.basename(self.path)} (progress: {current_progress:.2f})")
+        
+        # Gestionar pausa/reanudar
+        if self.is_active and self.channel:
+            if is_paused and not self.was_paused:
+                self.channel.pause()
+                self.was_paused = True
+            elif not is_paused and self.was_paused:
+                self.channel.unpause()
+                self.was_paused = False
+    
+    def stop(self):
+        """Detiene el audio y resetea el estado"""
+        if self.channel:
+            self.channel.stop()
+        self.is_active = False
+        self.was_paused = False
+
 def main():
     pygame.init()
+    pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+    pygame.mixer.set_num_channels(32)  # Permitir múltiples canales simultáneos
+    
     width, height = 1200, 720
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
@@ -228,6 +278,46 @@ def main():
     texture.use(location=0)
     program['image'] = 0
 
+    # ========== CONFIGURAR CAPAS DE AUDIO ==========
+    audio_folder = "Audios"
+    audio_files = []
+    
+    # Buscar archivos de audio
+    if os.path.exists(audio_folder):
+        audio_files = sorted([
+            os.path.join(audio_folder, f) 
+            for f in os.listdir(audio_folder) 
+            if f.lower().endswith(('.mp3', '.wav', '.ogg'))
+        ])
+    
+    # Crear capas de audio distribuidas uniformemente
+    audio_layers = []
+    if audio_files:
+        num_audios = len(audio_files)
+        print(f"\n🎵 Encontrados {num_audios} archivos de audio")
+        
+        for i, audio_file in enumerate(audio_files):
+            # Distribuir entre 0.0 y 0.95 (dejar margen al final)
+            activation_point = (i / max(num_audios - 1, 1)) * 0.95
+            
+            # Volumen decreciente para evitar saturación
+            volume = 1.0 - (i / num_audios) * 0.3
+            
+            layer = AudioLayer(audio_file, activation_point, volume)
+            if layer.load():
+                audio_layers.append(layer)
+                print(f"  ✓ {os.path.basename(audio_file)} → activa en {activation_point:.2f}")
+    else:
+        print(f"\n⚠️  No se encontraron archivos de audio en '{audio_folder}'")
+    
+    print(f"\n{'='*60}")
+    print(f"🎮 CONTROLES:")
+    print(f"  ESPACIO = Pausar/Reanudar")
+    print(f"  R       = Resetear")
+    print(f"  ESC     = Salir")
+    print(f"{'='*60}\n")
+
+    # Variables de tiempo y estado
     start_time = time.time()
     duration = 60.0
     isPaused = False
@@ -246,36 +336,56 @@ def main():
             if event.type == QUIT:
                 running = False
             elif event.type == KEYDOWN:
-                # Quit program
+                # Salir
                 if event.key == K_ESCAPE:
                     running = False
-                # Reset time
+                    
+                # Reset completo
                 elif event.key == K_r:
+                    print("🔄 Reseteando...")
+                    for layer in audio_layers:
+                        layer.stop()
                     start_time = time.time()
                     resetting = False
-                # Pause / Unpause
+                    isPaused = False
+                    
+                # Pausar/reanudar con transición
                 elif event.key == K_SPACE:
-                    if not resetting:
+                    if not isPaused and not resetting:
+                        # Iniciar animación de pausa
                         resetting = True
                         reset_start = time.time()
-                        reset_from = min(1.0, elapsed / duration)
-                    
-                    if isPaused:
+                        reset_from = min(1.0, (time.time() - start_time) / duration)
+                        print("⏸️  Pausando...")
+                    elif isPaused:
+                        # Reanudar
                         isPaused = False
                         start_time = time.time()
                         resetting = False
+                        # Resetear audios para que empiecen sincronizados
+                        for layer in audio_layers:
+                            layer.stop()
+                        print("▶️  Reanudando...")
 
         elapsed = time.time() - start_time    
 
+        # Calcular progress
         if resetting:
             t = (time.time() - reset_start) / reset_duration
             if t >= 1.0:
                 isPaused = True
+                progress = 0.0
+                resetting = False
             else:
                 progress = reset_from * (1.0 - t)
         else:
             progress = min(1.0, elapsed / duration)
 
+        # Actualizar todas las capas de audio
+        for layer in audio_layers:
+            layer.update(progress, isPaused)
+
+        # Renderizar
         ctx.clear(0.0, 0.0, 0.0)
         
         program['progress'].value = progress
@@ -292,6 +402,9 @@ def main():
         pygame.display.flip()
         clock.tick(60)
 
+    # Cleanup
+    for layer in audio_layers:
+        layer.stop()
     pygame.quit()
 
 if __name__ == "__main__":
